@@ -1,5 +1,9 @@
 # ml-platform
 
+[![Portfolio](https://img.shields.io/badge/↩-siddharthgaur1-111827?style=flat-square)](https://github.com/siddharthgaur1)
+[![CI](https://github.com/siddharthgaur1/ml-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/siddharthgaur1/ml-platform/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A feature store, a drift monitor, and a real-time fraud-scoring service that runs through both.
 
 ## The problem this solves
