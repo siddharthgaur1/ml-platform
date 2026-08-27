@@ -4,20 +4,25 @@ services:
   ml-monitor:
     build: .
     ports:
-      - "8080:8080"   # REST API
+      - "8080:8080"   # REST API (when running `start`)
       - "8501:8501"   # Streamlit dashboard
     volumes:
-      - ml_monitor_data:/data
+      - ml_platform_data:/data
       - ./models:/models:ro       # mount your pickled model here
       - ./reference:/reference:ro # mount your reference dataset CSV here
     environment:
-      - ML_MONITOR_DB=/data/ml_monitor.db
-    command: >
-      python -m ml_monitor.cli start
-      --model /models/model.pkl
-      --reference /reference/reference.csv
-      --port 8080
-      --db /data/ml_monitor.db
+      - ML_MONITOR_DB=/data/ml_platform.db
+    # Default command just prints status against an empty DB, so `docker
+    # compose up` succeeds with no setup. A drift monitor has nothing generic
+    # to monitor out of the box -- point it at your own model once you have
+    # one:
+    #
+    #   command: >
+    #     python -m ml_platform.monitoring.cli start
+    #     --model /models/model.pkl
+    #     --reference /reference/reference.csv
+    #     --port 8080
+    #     --db /data/ml_platform.db
 
 volumes:
-  ml_monitor_data:
+  ml_platform_data:

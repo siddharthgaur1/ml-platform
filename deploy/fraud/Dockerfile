@@ -5,6 +5,11 @@
 # compiler in the runtime image is attack surface for no benefit. The builder
 # produces a venv; the runtime stage copies that and nothing else.
 #
+# Build context is the repo root (see docker-compose.yml's `context: ../..`):
+# the 2026-08 merge moved this from flat common/producer/scorer/api/monitor/
+# training/ directories into src/ml_platform/fraud/, so the image now installs
+# the whole ml-platform package (fraud extra) rather than copying loose dirs.
+#
 # TODO(pin): `-slim-bookworm` pins the Debian release but still floats the
 # patch version. Digest-pinning is stronger — replace with
 # `python:3.11-slim-bookworm@sha256:<digest>` from `docker inspect` after a
@@ -23,8 +28,9 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install ".[fraud]"
 
 
 FROM ${PYTHON_IMAGE} AS runtime
@@ -43,21 +49,10 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
-
-COPY --chown=appuser:appuser common ./common
-COPY --chown=appuser:appuser producer ./producer
-COPY --chown=appuser:appuser scorer ./scorer
-COPY --chown=appuser:appuser api ./api
-COPY --chown=appuser:appuser monitor ./monitor
-COPY --chown=appuser:appuser training ./training
-COPY --chown=appuser:appuser scripts ./scripts
-
-# Non-root. Nothing here needs a privileged port, and the only writes are to
-# /reports, which compose mounts.
 USER appuser
 
 EXPOSE 8000
 
 # Compose overrides this for producer/monitor. Having a real default means
 # `docker run` on the image alone does something sensible.
-CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "ml_platform.fraud.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

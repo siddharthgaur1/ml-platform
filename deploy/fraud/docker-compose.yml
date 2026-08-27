@@ -3,8 +3,15 @@
 #
 # `x-app-*` anchors keep the three application services from drifting apart:
 # they run the same image and must agree on how they reach Redis/Postgres.
+#
+# Build context is the repo root: the 2026-08 merge moved this subsystem's
+# code from flat common/producer/scorer/api/monitor/training/ directories
+# here into src/ml_platform/fraud/, and the image now installs the whole
+# ml-platform package (fraud extra) rather than copying loose dirs.
 x-app-build: &app-build
-  build: .
+  build:
+    context: ../..
+    dockerfile: deploy/fraud/Dockerfile
   restart: unless-stopped
 
 x-backends: &backends
@@ -58,7 +65,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ../../src/ml_platform/fraud/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fraud"]
       interval: 5s
@@ -68,9 +75,11 @@ services:
   # One-off: `make train` (or `docker compose run --rm trainer`) before the
   # first `docker compose up`.
   trainer:
-    build: .
+    build:
+      context: ../..
+      dockerfile: deploy/fraud/Dockerfile
     profiles: ["tools"]
-    command: sh -c "python -m training.generate_data && python -m training.train"
+    command: sh -c "python -m ml_platform.fraud.training.generate_data && python -m ml_platform.fraud.training.train"
     environment:
       <<: *backends
     volumes:
@@ -79,7 +88,7 @@ services:
 
   producer:
     <<: *app-build
-    command: python -m producer.main
+    command: python -m ml_platform.fraud.producer.main
     depends_on:
       redpanda:
         condition: service_healthy
@@ -88,7 +97,7 @@ services:
 
   scorer:
     <<: *app-build
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn ml_platform.fraud.api.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     depends_on:
@@ -120,7 +129,7 @@ services:
 
   monitor:
     <<: *app-build
-    command: python -m monitor.main
+    command: python -m ml_platform.fraud.monitor.main
     depends_on:
       postgres:
         condition: service_healthy

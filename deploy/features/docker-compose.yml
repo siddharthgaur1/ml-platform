@@ -1,16 +1,22 @@
 # Minimal compose: the API with the default parquet+sqlite stores, plus an
 # optional Redis for the online store. Redis is not required — swap
-# featurestore.yaml's online_store.type to "redis" if you enable it.
+# ml_platform.yaml's online_store.type to "redis" if you enable it.
+#
+# Build context is the repo root (../..) because the image needs
+# pyproject.toml and src/, not just this directory.
 services:
   api:
-    build: .
+    build:
+      context: ../..
+      dockerfile: deploy/features/Dockerfile
     ports:
       - "8000:8000"
     volumes:
       - ./data:/app/data
-      - ./featurestore.yaml:/app/featurestore.yaml
+      # Uncomment to override the baked-in default config with your own:
+      # - ./ml_platform.yaml:/app/ml_platform.yaml
     environment:
-      - FEATURESTORE_CONFIG=featurestore.yaml
+      - FEATURESTORE_CONFIG=ml_platform.yaml
 
   redis:
     image: redis:7-alpine
