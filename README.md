@@ -6,6 +6,10 @@
 
 A feature store, a drift monitor, and a real-time fraud-scoring service that runs through both.
 
+![Terminal output of the fraud drift demo: drift scores before and after an injected shift](docs/drift-demo.svg)
+
+<sub>Real stdout of `python examples/fraud_detection_example.py` on synthetic data with drift injected on purpose (note the phase-1 false positive on `amount`). Regenerate with `python scripts/make_readme_capture.py`.</sub>
+
 ## The problem this solves
 
 Three things have to agree for production ML to work: the features you train on,
