@@ -2,6 +2,38 @@
 
 ## [Unreleased]
 
+### Performance
+- `9d71cec` — the fraud scorer's model call is micro-batched. Profiling the
+  committed bundle found **84% of per-request model CPU in
+  `IsolationForest.score_samples` on a single `(1, 11)` row** — 10.9 ms of
+  13.0 ms, and per-call overhead rather than arithmetic, since 256 rows cost
+  only 2.4x one row. Batching that call takes the model stage from
+  **24.5 to 222.6 req/s (8.8x–9.2x across runs)** with scores bitwise
+  identical. `lrange`+`smembers` are now one Redis pipeline instead of two
+  round trips, and the Postgres write moved off the request path into a bounded
+  background queue.
+
+  The README previously attributed the 29.7 req/s figure to "`uvicorn` running
+  without `--workers`". That was half the story, and the cheaper half: the
+  isolated model stage alone reproduces 24.5 req/s, so `--workers` would have
+  bought replicas to hide the real defect. The 1400 ms median was not work
+  either — 29.7 x 1.4 s = 41.6 requests in flight, which is FastAPI's
+  40-thread pool saturated.
+
+  Found while verifying: `predict_proba` returns float32, so the batched
+  ensemble computed in float32 where the one-row path had widened via
+  `float()`, diverging by ~4e-8. Caught only because the parity test asserts
+  bitwise equality rather than `allclose`.
+
+### Added
+- `2f2f7b2` — Helm chart (`deploy/helm/fraud-scorer`) with HPA, PDB and
+  ServiceMonitor, a 3-node `kind` config, a Grafana dashboard, and
+  `docs/BENCHMARK.md` documenting the three ways a throughput number from this
+  repo can be wrong — including the `RATE_LIMIT_PER_MIN` default of 10 req/s
+  per key, which silently caps any load test.
+- Per-stage Prometheus histograms (`fraud_score_stage_latency_seconds`),
+  model batch size, and write-queue depth/drop counters.
+
 ### Fixed
 - `872e8f6` — all three deployment configs (`Dockerfile`, `docker-compose.yml`,
   `deploy/fraud/`, `deploy/features/`) were broken by the repo merge; paths
