@@ -12,6 +12,10 @@ x-app-build: &app-build
   build:
     context: ../..
     dockerfile: deploy/fraud/Dockerfile
+    # Pinned: without a target, buildkit builds the LAST stage in the file, so
+    # adding the runtime-with-model stage for Kubernetes silently changed what
+    # compose builds. Compose mounts ./models, so it wants `runtime`.
+    target: runtime
   restart: unless-stopped
 
 x-backends: &backends
@@ -78,6 +82,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/fraud/Dockerfile
+      target: runtime
     profiles: ["tools"]
     command: sh -c "python -m ml_platform.fraud.training.generate_data && python -m ml_platform.fraud.training.train"
     environment:
