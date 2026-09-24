@@ -28,9 +28,21 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Dependencies before source, deliberately.
+#
+# The obvious ordering -- COPY src, then pip install ".[fraud]" -- puts the whole
+# dependency install (xgboost, shap, scikit-learn, evidently: ~4 minutes) in a
+# layer keyed on the source tree, so editing one Python file reinstalls
+# everything. Installing against a stub package first keeps that layer cached
+# until pyproject.toml itself changes, which turns a code-change rebuild from
+# minutes into seconds.
 COPY pyproject.toml README.md ./
+RUN mkdir -p src/ml_platform && touch src/ml_platform/__init__.py  && pip install ".[fraud]"
+
+# Now the real source. --no-deps because the dependency set is already resolved
+# above; re-resolving here would defeat the split.
 COPY src ./src
-RUN pip install ".[fraud]"
+RUN pip install --no-deps --force-reinstall ".[fraud]"
 
 
 FROM ${PYTHON_IMAGE} AS runtime
