@@ -59,7 +59,7 @@ two.
 | Subsystem boundaries crossed by one test | 3 |
 | Duplicate code eliminated by the merge | **~0 lines — see Limitations** |
 | Fraud model stage, before | 24.5 req/s, median 391 ms, p95 696 ms |
-| Fraud model stage, after | **222.6 req/s, median 51 ms, p95 71 ms** (9.1x, scores bitwise identical) |
+| Fraud model stage, after | **222.6 req/s, median 51 ms, p95 71 ms** (8.8-9.2x over four runs, scores bitwise identical) |
 | Fraud service bottleneck | `IsolationForest.score_samples` on one row: 10.9 ms of 13.0 ms model CPU |
 
 Every number above is reproducible from this repo, on a laptop, not extrapolated.

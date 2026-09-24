@@ -53,7 +53,19 @@ Measured, 12 threads × 400 requests, `deploy/fraud/models/model.joblib`,
 | one row per call | 24.5 req/s | 391 ms | 696 ms | 880 ms |
 | micro-batched | **222.6 req/s** | **51 ms** | **71 ms** | 103 ms |
 
-**9.1x, scores bitwise identical across 4,800 requests.**
+(One representative run of four; see the range below.)
+
+**9.1x, scores bitwise identical across 4,800 requests.** Across four clean runs
+the speedup held at **8.8x-9.2x** (before: 23.3-27.5 req/s, after: 212.6-254.3).
+
+**This benchmark is sensitive to machine load, and visibly so.** One run taken
+while several other Python processes were competing for cores reported the
+single-row path at 0.4 req/s and a 523x speedup. That figure is garbage, and it
+is self-evidently garbage: 12 threads at a 293 ms median cannot produce 0.4 req/s,
+so wall-clock time was inflated by something other than the work being measured.
+Run it on an otherwise idle machine, run it more than once, and discard any result
+whose throughput and latency percentiles disagree with each other. A speedup
+number that moves by 50x between runs is measuring the machine, not the code.
 
 That 24.5 req/s is worth dwelling on: it is the model stage *alone*, with no
 Redis, no Postgres and no HTTP, and it independently reproduces the 29.7 req/s

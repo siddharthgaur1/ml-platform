@@ -73,7 +73,7 @@ def run(label: str, call, threads: int, requests: int, rows: np.ndarray):
         t.join()
     elapsed = time.perf_counter() - t0
 
-    flat = sorted(l for per in latencies for l in per)
+    flat = sorted(ms for per in latencies for ms in per)
     total = threads * requests
     print(
         f"{label:<22} {total / elapsed:8.1f} req/s   "
@@ -104,7 +104,8 @@ def main() -> int:
         m = np.asarray(batch, dtype=float)
         proba = xgb.predict_proba(m)[:, 1].astype(np.float64)
         iso_scores = scaler.transform((-iso.score_samples(m)).reshape(-1, 1))[:, 0]
-        return list(zip(weight * proba + (1 - weight) * iso_scores, explainer.shap_values(m)))
+        scores = weight * proba + (1 - weight) * iso_scores
+        return list(zip(scores, explainer.shap_values(m), strict=True))
 
     def single(row):
         """The pre-batching path: one call per request, per model."""

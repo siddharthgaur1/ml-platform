@@ -8,13 +8,11 @@ invalidate the drift reference the bundle was trained with.
 from __future__ import annotations
 
 import os
-import queue
 import threading
 import time
 
 import numpy as np
 import pytest
-
 import shap
 
 from ml_platform.fraud.scorer.batcher import MicroBatcher

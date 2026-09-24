@@ -21,7 +21,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 import structlog
 
@@ -125,7 +125,7 @@ class MicroBatcher:
             for pending in batch:
                 pending.error = exc
         else:
-            for pending, result in zip(batch, results):
+            for pending, result in zip(batch, results, strict=True):
                 pending.result = result
         finally:
             # Must happen even if the callback or the assignment above throws:

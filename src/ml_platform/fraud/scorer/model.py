@@ -83,7 +83,7 @@ class FraudScorer:
         # silently invalidates every drift comparison against that reference.
         fraud_scores = self.xgb_weight * xgb_proba + (1 - self.xgb_weight) * iso_scores
         shap_values = self._shap_explainer.shap_values(matrix)
-        return list(zip(fraud_scores, shap_values))
+        return list(zip(fraud_scores, shap_values, strict=True))
 
     def score(self, tx: dict) -> dict:
         started = time.perf_counter()
@@ -105,7 +105,7 @@ class FraudScorer:
         metrics.STAGE_LATENCY.labels(stage="model").observe(time.perf_counter() - started)
 
         fraud_score = float(fraud_score)
-        ranked = sorted(zip(FEATURE_NAMES, shap_values), key=lambda kv: abs(kv[1]), reverse=True)
+        ranked = sorted(zip(FEATURE_NAMES, shap_values, strict=True), key=lambda kv: abs(kv[1]), reverse=True)
         shap_explanation = {name: round(float(val), 4) for name, val in ranked[:TOP_K_SHAP]}
 
         # record AFTER computing features, so this transaction only affects
