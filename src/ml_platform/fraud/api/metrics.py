@@ -54,5 +54,34 @@ DRIFT_SHARE = Gauge(
 )
 
 
+STAGE_LATENCY = Histogram(
+    "fraud_score_stage_latency_seconds",
+    "Latency of one stage inside a scoring request. Attributing total latency to "
+    "redis_history / model / redis_update is what tells you whether a regression "
+    "is model CPU or backend I/O -- SCORE_LATENCY alone cannot.",
+    ["stage"],
+    buckets=(0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1.0),
+)
+
+MODEL_BATCH_SIZE = Histogram(
+    "fraud_model_batch_size",
+    "Rows per batched model call. Sitting at 1 under load means the batch window "
+    "is too short to be collecting anything and the 10.9ms single-row cost is back.",
+    buckets=(1, 2, 4, 8, 16, 32, 64, 128),
+)
+
+DB_QUEUE_DEPTH = Gauge(
+    "fraud_db_write_queue_depth",
+    "Score rows waiting to be written. Climbing steadily means the writer cannot "
+    "keep up and rows are about to be dropped.",
+)
+
+DB_QUEUE_DROPPED = Counter(
+    "fraud_db_write_queue_dropped_total",
+    "Score rows discarded because the write queue was full. The response was "
+    "still served -- this is persistence loss, not scoring loss.",
+)
+
+
 def render() -> tuple[bytes, str]:
     return generate_latest(), CONTENT_TYPE_LATEST

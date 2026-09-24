@@ -21,10 +21,14 @@ class RedisFeatureStore:
         # LPUSH stores newest-first; reverse to oldest-first so amounts[-n:]
         # (used by common.features) picks the n MOST RECENT values, matching
         # how the offline trainer appends+truncates its history.
-        raw = self.client.lrange(f"user:{user_id}:amounts", 0, HISTORY_LEN - 1)
+        # Pipelined: these were two separate round trips, and on the scoring
+        # path every round trip is paid once per request.
+        pipe = self.client.pipeline()
+        pipe.lrange(f"user:{user_id}:amounts", 0, HISTORY_LEN - 1)
+        pipe.smembers(f"user:{user_id}:devices")
+        raw, devices = pipe.execute()
         amounts = [float(a) for a in reversed(raw)]
-        devices = self.client.smembers(f"user:{user_id}:devices")
-        return amounts, devices
+        return amounts, set(devices)
 
     def update(self, user_id: str, amount: float, device_id: str) -> None:
         amounts_key = f"user:{user_id}:amounts"

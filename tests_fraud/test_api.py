@@ -38,6 +38,10 @@ class _FakeScorer:
         self.calls.append(tx)
         return {"fraud_score": 0.91, "is_fraud": True, "shap_explanation": {"amount": 1.2}}
 
+    def close(self):
+        """Real FraudScorer owns a batcher thread that lifespan shutdown stops."""
+        self.closed = True
+
 
 class _FakeStore:
     def __init__(self, ok):

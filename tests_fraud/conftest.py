@@ -59,6 +59,14 @@ class _FakePipeline:
         self.store = store
         self.ops = []
 
+    def lrange(self, key, start, end):
+        self.ops.append(lambda: self.store.lrange(key, start, end))
+        return self
+
+    def smembers(self, key):
+        self.ops.append(lambda: self.store.smembers(key))
+        return self
+
     def lpush(self, key, value):
         self.ops.append(lambda: self.store.lists.setdefault(key, []).insert(0, str(value)))
         return self

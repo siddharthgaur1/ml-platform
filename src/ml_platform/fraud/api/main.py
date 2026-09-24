@@ -26,6 +26,7 @@ state: dict = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_pool()
+    db.start_writer()
     init_rate_limiter()
     scorer = FraudScorer()
     state["scorer"] = scorer
@@ -36,12 +37,16 @@ async def lifespan(app: FastAPI):
 
     state["last_stream_message_at"] = time.time()
     state["consumer_thread"], state["consumer_stop"] = start_stream_consumer_thread(
-        scorer, db.insert_score, on_message=_note_message
+        scorer, db.enqueue_score, on_message=_note_message
     )
     log.info("api_started", model_version=scorer.version, model_source=scorer.source)
     yield
     state["consumer_stop"].set()
     state["consumer_thread"].join(timeout=5)
+    # Order matters: stop producing rows, flush the ones already queued, then
+    # drop the pool the writer needs to flush them through.
+    scorer.close()
+    db.stop_writer()
     db.close_pool()
     log.info("api_stopped")
 
@@ -72,14 +77,12 @@ def score(req: ScoreRequest, key_id: str = Depends(require_api_key)) -> ScoreRes
         "merchant_category": req.merchant_category,
         **result,
     }
-    try:
-        db.insert_score(row)
-    except Exception:
-        # The score itself is valid and the caller needs it, so this stays a
-        # 200 — but it is counted, because sustained failures mean /stats and
-        # drift detection are blind while scoring still looks healthy.
-        metrics.DB_INSERT_FAILURES.inc()
-        log.exception("db_insert_failed", transaction_id=req.transaction_id)
+    # Queued, not written inline: the caller already has its score, and a
+    # committing INSERT per request put a Postgres round trip and an fsync on
+    # the scoring path. Failures are still counted (in the writer) rather than
+    # raised, because sustained loss means /stats and drift detection are blind
+    # while scoring still looks healthy.
+    db.enqueue_score(row)
 
     return ScoreResponse(
         transaction_id=req.transaction_id,
