@@ -34,6 +34,20 @@ serviceAccount:
 #   2. The HPA can only act on pods. Workers inside a pod are invisible to it.
 workers: 1
 
+# OpenMP threads per worker for XGBoost / scikit-learn.
+#
+# The default is one thread per CORE, which is wrong twice over here: a (1, 11)
+# or (4, 11) matrix is far too small to parallelise usefully, and every pod on a
+# shared node would spawn `cores` threads regardless of its CPU limit -- a pod
+# limited to 1 CPU still starts 12 OpenMP threads on a 12-core node. One uvicorn
+# worker was measured at 482% CPU this way.
+#
+# Measured effect of pinning to 1: no throughput change in a single process
+# (29.0 -> 29.6 req/s baseline, 239.5 -> 245.1 batched), but a materially tighter
+# tail (batched p99 137ms -> 69ms). Parallelism comes from replicas, which the
+# HPA can actually see.
+ompNumThreads: 1
+
 # Bounded queueing. Without a limit, load past capacity piles into FastAPI's
 # 40-thread pool and latency grows without bound -- that is what produced a 2.3s
 # p95 at 29.7 req/s while the handler itself reported 32ms. Shedding past the
@@ -92,6 +106,9 @@ scoring:
   # guard, fatal to a load test where every client shares one key. See
   # docs/BENCHMARK.md.
   rateLimitPerMin: 600
+  # false scores each request inline instead of batching: the pre-batching code
+  # path, kept as an escape hatch and as the honest baseline for a before/after.
+  modelBatchEnabled: true
   modelBatchMax: 64
   modelBatchWaitMs: 5
   dbWriteBatch: 200

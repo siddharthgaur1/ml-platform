@@ -11,6 +11,10 @@ data:
   KAFKA_BROKERS: {{ .Values.kafka.brokers | quote }}
   KAFKA_TOPIC: {{ .Values.kafka.topic | quote }}
   RATE_LIMIT_PER_MIN: {{ .Values.scoring.rateLimitPerMin | quote }}
+  OMP_NUM_THREADS: {{ .Values.ompNumThreads | quote }}
+  OPENBLAS_NUM_THREADS: {{ .Values.ompNumThreads | quote }}
+  MKL_NUM_THREADS: {{ .Values.ompNumThreads | quote }}
+  MODEL_BATCH_ENABLED: {{ .Values.scoring.modelBatchEnabled | quote }}
   MODEL_BATCH_MAX: {{ .Values.scoring.modelBatchMax | quote }}
   MODEL_BATCH_WAIT_MS: {{ .Values.scoring.modelBatchWaitMs | quote }}
   DB_WRITE_BATCH: {{ .Values.scoring.dbWriteBatch | quote }}

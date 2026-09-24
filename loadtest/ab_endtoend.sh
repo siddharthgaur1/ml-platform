@@ -60,12 +60,13 @@ wait_healthy() {
 }
 
 run_arm() {
-  local name="$1" workers="$2" batching="$3"
+  local name="$1" workers="$2" batching="$3" omp="${4:-1}"
   echo
-  echo "=== arm: $name (workers=$workers batching=$batching rate_limit=$RATE_LIMIT_PER_MIN) ==="
+  echo "=== arm: $name (workers=$workers batching=$batching omp=$omp rate_limit=$RATE_LIMIT_PER_MIN) ==="
   (
     cd "$COMPOSE_DIR"
     UVICORN_WORKERS="$workers" MODEL_BATCH_ENABLED="$batching" MODEL_BATCH_WAIT_MS=5 \
+      OMP_NUM_THREADS="$omp" OPENBLAS_NUM_THREADS="$omp" MKL_NUM_THREADS="$omp" \
       docker compose up -d --no-build scorer redis postgres redpanda
   )
 
@@ -136,9 +137,14 @@ PY
 
 echo "A/B end-to-end: users=$USERS spawn=$SPAWN duration=$DURATION after_workers=$AFTER_WORKERS"
 
-run_arm before 1 false
-run_arm batched-1w 1 true
-run_arm after "$AFTER_WORKERS" true
+run_arm before 1 false 1
+run_arm batched-1w 1 true 1
+run_arm after "$AFTER_WORKERS" true 1
+# Same as `after`, but letting OpenMP spawn one thread per core in every
+# worker: AFTER_WORKERS x cores threads competing for cores cores. Passed as an
+# explicit core count rather than 0, because OMP_NUM_THREADS=0 is
+# implementation-defined and libgomp may just ignore it.
+run_arm after-ompN "$AFTER_WORKERS" true "$(nproc 2>/dev/null || echo 12)"
 
 echo
 echo "=== summary (from locust CSVs) ==="
@@ -147,7 +153,7 @@ import csv, os
 
 out = os.path.join("loadtest", "results")
 rows = {}
-for arm in ("before", "batched-1w", "after"):
+for arm in ("before", "batched-1w", "after", "after-ompN"):
     path = os.path.join(out, f"{arm}_stats.csv")
     if not os.path.exists(path):
         print(f"{arm}: no CSV")
