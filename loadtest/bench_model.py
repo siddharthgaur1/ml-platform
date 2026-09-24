@@ -118,8 +118,20 @@ def main() -> int:
 
     print(
         f"bundle={MODEL_PATH}  threads={args.threads}  requests/thread={args.requests}  "
-        f"batch<={args.max_batch} wait<={args.batch_wait_ms}ms\n"
+        f"batch<={args.max_batch} wait<={args.batch_wait_ms}ms"
     )
+    # Thread-pool settings matter enough to print: XGBoost and scikit-learn
+    # use OpenMP, which defaults to one thread per core. On a single (1, 11)
+    # row that is mostly fork/join overhead, and with several server workers
+    # it oversubscribes the machine badly (measured: 482% CPU from one
+    # uvicorn worker). A number quoted without these is not reproducible.
+    _t = {k: os.environ.get(k, "unset") for k in
+          ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")}
+    print(
+        f"  xgb n_jobs={xgb.get_params().get('n_jobs')}  cores={os.cpu_count()}  "
+        + "  ".join(f"{k}={v}" for k, v in _t.items())
+    )
+    print()
     try:
         before = run("one row per call", single, args.threads, args.requests, rows)
         after = run("micro-batched", lambda r: batcher.submit(r)[0], args.threads, args.requests, rows)
