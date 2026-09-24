@@ -1,0 +1,239 @@
+{
+  "title": "Fraud scorer",
+  "uid": "fraud-scorer",
+  "tags": ["ml-platform", "fraud"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Serving",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Throughput (req/s)",
+      "description": "Split by outcome. A rising error rate at constant total is a different problem from a falling total.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "fillOpacity": 10, "lineWidth": 2 } },
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*error.*" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(fraud_score_requests_total[1m]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Scoring latency percentiles",
+      "description": "Model scoring latency as the handler measures it. Under saturation the client-observed latency is much higher than this, because the difference is queue wait in FastAPI's threadpool -- that gap is the signal to raise --limit-concurrency or add replicas.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 0, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(fraud_score_latency_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(fraud_score_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(fraud_score_latency_seconds_bucket[5m])))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Where the time goes",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Mean latency per stage",
+      "description": "The panel that makes a regression attributable: model CPU vs Redis vs Postgres. If 'model' climbs toward 11ms, batching has stopped engaging. If redis_* dominates, the bottleneck is network, not CPU, and more replicas will not help.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 20, "lineWidth": 1, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stage) (rate(fraud_score_stage_latency_seconds_sum[5m])) / sum by (stage) (rate(fraud_score_stage_latency_seconds_count[5m]))",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Mean model batch size",
+      "description": "Sitting at 1 under load means MODEL_BATCH_WAIT_MS is too short to collect anything and the 10.9ms single-row IsolationForest cost is back. This is the single most diagnostic panel for the throughput work.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": { "fillOpacity": 10, "lineWidth": 2 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(fraud_model_batch_size_sum[5m]) / rate(fraud_model_batch_size_count[5m])",
+          "legendFormat": "rows/batch"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Persistence and scale",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Write queue depth",
+      "description": "Rows waiting to reach Postgres. Climbing steadily means the writer cannot keep up and rows are about to be dropped -- scoring stays correct while /stats and drift detection go blind.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 19 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum(fraud_db_write_queue_depth)", "legendFormat": "queued" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Persistence loss (rows/s)",
+      "description": "Non-zero means the service is serving correct scores that nobody will ever be able to audit. Alert on this, not on the queue depth.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 19 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "fillOpacity": 20, "lineWidth": 2 },
+          "color": { "mode": "fixed", "fixedColor": "red" }
+        },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(fraud_db_write_queue_dropped_total[5m]))", "legendFormat": "dropped" },
+        { "refId": "B", "expr": "sum(rate(fraud_db_insert_failures_total[5m]))", "legendFormat": "insert failures" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Replicas serving",
+      "description": "Count of scraped pods. Watch this against Throughput during a load test: that pair is the horizontal scale-out story the HPA is responsible for.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 19 },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "fillOpacity": 10, "lineWidth": 2, "stepAfter": true } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(count by (instance) (fraud_model_info))",
+          "legendFormat": "pods"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Model and stream health",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 26 }
+    },
+    {
+      "type": "stat",
+      "title": "Fraud flag rate",
+      "description": "Share of scored transactions at or above the threshold. A step change here without a deploy is a data problem, which is what the drift monitor exists to catch.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 27 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 2 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(fraud_flagged_total[5m])) / clamp_min(sum(rate(fraud_score_requests_total{outcome=\"ok\"}[5m])), 0.001)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Drift share",
+      "description": "Fraction of monitored columns flagged as drifted in the latest report.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 27 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 0.3 },
+              { "color": "red", "value": 0.5 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [{ "refId": "A", "expr": "max(fraud_drift_share)" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Stream message age",
+      "description": "Seconds since the Kafka consumer last processed a message. Rises without bound if the consumer thread died while the process stayed up and healthy -- the failure that /health deliberately does not treat as fatal, because POST /score still works.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 27 },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 0, "lineWidth": 2 } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "max(fraud_stream_last_message_age_seconds)", "legendFormat": "age" }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "Loaded model per pod",
+      "description": "Version and source (mlflow registry stage vs local joblib) per replica. A rollout that half-completed shows up here as two versions serving at once.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 33 },
+      "targets": [
+        { "refId": "A", "expr": "fraud_model_info", "instant": true, "format": "table" }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true, "__name__": true, "job": true } } }
+      ]
+    }
+  ]
+}

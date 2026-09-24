@@ -87,6 +87,15 @@ kubectl port-forward svc/monitoring-grafana 3000:80
 # admin / prom-operator
 ```
 
+Import `deploy/helm/grafana-dashboard.json` (Dashboards -> New -> Import) and pick
+the Prometheus datasource. The two panels worth watching during a load test:
+
+- **Mean model batch size.** If it sits at 1 while under load, `MODEL_BATCH_WAIT_MS`
+  is too short to collect anything and the 10.9 ms single-row cost is back --
+  throughput will look like the old numbers and nothing else will explain why.
+- **Mean latency per stage.** Attributes a regression to model CPU vs Redis vs
+  Postgres. If the Redis stages dominate, adding replicas will not help.
+
 ## Cloud (GKE / EKS)
 
 Same chart. Push the image to a registry, then:
