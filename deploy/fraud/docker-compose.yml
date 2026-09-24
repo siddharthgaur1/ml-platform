@@ -138,6 +138,7 @@ services:
       # scoring endpoint and a silent cap on any load test, since every locust
       # user shares one key -- see docs/BENCHMARK.md before trusting a number.
       RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-600}
+      MODEL_BATCH_ENABLED: ${MODEL_BATCH_ENABLED:-true}
       MODEL_BATCH_MAX: ${MODEL_BATCH_MAX:-64}
       MODEL_BATCH_WAIT_MS: ${MODEL_BATCH_WAIT_MS:-5}
     volumes:

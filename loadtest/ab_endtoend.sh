@@ -1,24 +1,34 @@
 #!/usr/bin/env bash
 # End-to-end A/B of the scoring service through HTTP, Redis and Postgres.
 #
-# Run from the repo root, with the docker-compose stack buildable:
+# Run from the repo root, with the docker-compose stack already built:
 #     bash loadtest/ab_endtoend.sh
 #
-# The two arms differ in exactly two settings, and the same image serves both:
+# Three arms, from one image, differing only in two env vars:
 #
-#   before: UVICORN_WORKERS=1  MODEL_BATCH_WAIT_MS=0
-#   after:  UVICORN_WORKERS=N  MODEL_BATCH_WAIT_MS=5
+#   before:     UVICORN_WORKERS=1  MODEL_BATCH_ENABLED=false
+#   batched-1w: UVICORN_WORKERS=1  MODEL_BATCH_ENABLED=true
+#   after:      UVICORN_WORKERS=N  MODEL_BATCH_ENABLED=true
 #
-# MODEL_BATCH_WAIT_MS=0 makes the batcher's collection deadline expire
-# immediately, so every batch holds exactly one row -- which reproduces the
-# original one-call-per-request cost without checking out the old code. That
-# keeps the comparison to one variable pair rather than one variable pair plus a
-# rebuild.
+# Three and not two, because "we made it faster" is two separate claims: the code
+# change (batching) and the process change (workers). The middle arm attributes
+# them separately, and the batched-1w -> after gain should be roughly linear in
+# worker count. If it is not, something other than CPU is the ceiling and the
+# per-stage histogram printed after each arm will say what.
 #
-# RATE_LIMIT_PER_MIN is held HIGH and CONSTANT across both arms on purpose. The
-# 600/min default is 10 req/s per shared key and would cap both arms at roughly
-# the same wrong number, making the change look like it did nothing. See
-# docs/BENCHMARK.md.
+# MODEL_BATCH_ENABLED=false scores inline on the calling thread: the pre-batching
+# code path exactly, which is what makes the "before" arm honest without checking
+# out an old commit.
+#
+# Do NOT use MODEL_BATCH_WAIT_MS=0 as a stand-in for "before". It still routes
+# every request through the single batcher thread, serialising the model call with
+# none of the batching benefit. Measured, that is ~6.7 req/s against ~30 for the
+# real before arm -- it is a pessimisation, not a baseline, and using it would
+# have inflated the reported speedup by about 4x.
+#
+# RATE_LIMIT_PER_MIN is held HIGH and CONSTANT across all arms. The 600/min
+# default is 10 req/s per key, shared by every locust user through one key, and
+# would cap every arm at the same wrong number. See docs/BENCHMARK.md.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -38,7 +48,10 @@ mkdir -p "$OUT"
 wait_healthy() {
   echo "  waiting for /health..."
   for _ in $(seq 1 60); do
-    if curl -sf http://localhost:8000/health >/dev/null 2>&1; then echo "  healthy"; return 0; fi
+    if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+      echo "  healthy"
+      return 0
+    fi
     sleep 3
   done
   echo "  scorer never became healthy; recent logs:" >&2
@@ -47,19 +60,37 @@ wait_healthy() {
 }
 
 run_arm() {
-  local name="$1" workers="$2" wait_ms="$3"
+  local name="$1" workers="$2" batching="$3"
   echo
-  echo "=== arm: $name (workers=$workers batch_wait_ms=$wait_ms rate_limit=$RATE_LIMIT_PER_MIN) ==="
+  echo "=== arm: $name (workers=$workers batching=$batching rate_limit=$RATE_LIMIT_PER_MIN) ==="
   (
     cd "$COMPOSE_DIR"
-    UVICORN_WORKERS="$workers" MODEL_BATCH_WAIT_MS="$wait_ms" \
+    UVICORN_WORKERS="$workers" MODEL_BATCH_ENABLED="$batching" MODEL_BATCH_WAIT_MS=5 \
       docker compose up -d --no-build scorer redis postgres redpanda
   )
+
+  # Verify the container actually took the new config. Compose silently reusing a
+  # container would make this a comparison of one arm against itself, and the
+  # output would look completely normal.
+  local got_batching got_cmd
+  got_batching=$(docker inspect fraud-scorer-1 \
+    --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    | grep '^MODEL_BATCH_ENABLED=' | cut -d= -f2 || true)
+  got_cmd=$(docker inspect fraud-scorer-1 --format '{{json .Config.Cmd}}')
+  if [ "$got_batching" != "$batching" ]; then
+    echo "  FATAL: container has MODEL_BATCH_ENABLED='$got_batching', expected '$batching'" >&2
+    return 1
+  fi
+  case "$got_cmd" in
+    *"\"--workers\",\"$workers\""*) ;;
+    *) echo "  FATAL: container cmd lacks --workers $workers: $got_cmd" >&2; return 1 ;;
+  esac
+  echo "  config verified: batching=$got_batching workers=$workers"
+
   wait_healthy
 
-  # Warm the model, the SHAP explainer and the connection pools. Without this the
-  # first arm pays one-time costs the second does not, which flatters whichever
-  # arm runs second.
+  # Warm the model, the SHAP explainer and the connection pools, so the first arm
+  # does not pay one-time costs the later arms avoid.
   for _ in $(seq 1 20); do
     curl -sf -X POST http://localhost:8000/score \
       -H 'Content-Type: application/json' -H "X-API-Key: $API_KEYS" \
@@ -72,39 +103,75 @@ run_arm() {
     --headless -u "$USERS" -r "$SPAWN" -t "$DURATION" \
     --csv "$OUT/$name" --only-summary
 
-  echo "--- per-stage latency, arm=$name ---"
-  curl -s http://localhost:8000/metrics \
-    | grep -E '^fraud_(score_stage_latency_seconds_(sum|count)|model_batch_size_(sum|count)|db_write_queue)' \
-    || echo "  (no stage metrics scraped)"
+  echo "--- per-stage mean latency, arm=$name ---"
+  curl -s http://localhost:8000/metrics > "$OUT/$name-metrics.txt" || true
+  python - "$OUT/$name-metrics.txt" <<'PY'
+import re, sys
+text = open(sys.argv[1], encoding="utf-8").read()
+
+def val(pattern):
+    m = re.search(pattern, text, re.M)
+    return float(m.group(1)) if m else None
+
+for stage in ("redis_history", "model", "redis_update", "db_insert"):
+    c = val(rf'^fraud_score_stage_latency_seconds_count\{{stage="{stage}"\}} ([0-9.e+]+)')
+    s = val(rf'^fraud_score_stage_latency_seconds_sum\{{stage="{stage}"\}} ([0-9.e+]+)')
+    if c and s and c > 0:
+        print(f"  {stage:15s} {s / c * 1000:8.2f} ms/call   (n={int(c)})")
+
+bc = val(r'^fraud_model_batch_size_count ([0-9.e+]+)')
+bs = val(r'^fraud_model_batch_size_sum ([0-9.e+]+)')
+if bc and bc > 0:
+    print(f"  {'batch size':15s} {bs / bc:8.2f} rows/batch ({int(bc)} batches)")
+    if bs / bc < 1.5:
+        print("  NOTE: batch size ~1 -- batching is not engaging; the 10.9ms "
+              "single-row cost is in effect")
+d = val(r'^fraud_db_write_queue_dropped_total ([0-9.e+]+)')
+if d:
+    print(f"  {'rows dropped':15s} {int(d):8d}   (persistence loss)")
+PY
+  echo "  NOTE: with >1 worker these are one worker's numbers only; locust is the"
+  echo "        source of truth for throughput."
 }
 
 echo "A/B end-to-end: users=$USERS spawn=$SPAWN duration=$DURATION after_workers=$AFTER_WORKERS"
-echo "NOTE: with >1 worker, /metrics reflects only the worker that served the"
-echo "      scrape. locust is the throughput source of truth."
 
-run_arm before 1 0
-run_arm after "$AFTER_WORKERS" 5
+run_arm before 1 false
+run_arm batched-1w 1 true
+run_arm after "$AFTER_WORKERS" true
 
 echo
-echo "=== summary (requests/s and latency from locust CSVs) ==="
+echo "=== summary (from locust CSVs) ==="
 python - <<'PY'
 import csv, os
+
 out = os.path.join("loadtest", "results")
-for arm in ("before", "after"):
+rows = {}
+for arm in ("before", "batched-1w", "after"):
     path = os.path.join(out, f"{arm}_stats.csv")
     if not os.path.exists(path):
-        print(f"{arm}: no CSV"); continue
+        print(f"{arm}: no CSV")
+        continue
     with open(path, newline="", encoding="utf-8") as f:
-        rows = [r for r in csv.DictReader(f) if r.get("Name") == "Aggregated"]
-    if not rows:
-        print(f"{arm}: no Aggregated row"); continue
-    r = rows[0]
-    print(f"{arm:7s} {float(r['Requests/s']):8.1f} req/s   "
-          f"median {r['Median Response Time']:>7} ms   "
-          f"p95 {r.get('95%', '?'):>7} ms   "
+        agg = [r for r in csv.DictReader(f) if r.get("Name") == "Aggregated"]
+    if not agg:
+        print(f"{arm}: no Aggregated row")
+        continue
+    r = agg[0]
+    rows[arm] = float(r["Requests/s"])
+    print(f"{arm:11s} {float(r['Requests/s']):8.1f} req/s   "
+          f"median {r['Median Response Time']:>6} ms   "
+          f"p95 {r.get('95%', '?'):>6} ms   "
           f"p99 {r.get('99%', '?'):>7} ms   "
           f"failures {r['Failure Count']}/{r['Request Count']}")
+
+if {"before", "batched-1w"} <= rows.keys():
+    print(f"\ncode change alone (batching, 1 worker): {rows['batched-1w'] / rows['before']:.1f}x")
+if {"batched-1w", "after"} <= rows.keys():
+    print(f"process change alone (workers):          {rows['after'] / rows['batched-1w']:.1f}x")
+if {"before", "after"} <= rows.keys():
+    print(f"combined:                                {rows['after'] / rows['before']:.1f}x")
 PY
 echo
-echo "Non-zero failures invalidate the run -- check for 429 (rate limit) or 503"
-echo "(limit-concurrency shedding) before quoting any number above."
+echo "Any non-zero failure count invalidates that arm. Check for 429 (rate limit)"
+echo "or 503 (limit-concurrency shedding) before quoting a number."

@@ -19,6 +19,7 @@ from ml_platform.fraud.api import metrics
 from ml_platform.fraud.common import registry
 from ml_platform.fraud.common.config import (
     FRAUD_SCORE_THRESHOLD,
+    MODEL_BATCH_ENABLED,
     MODEL_BATCH_MAX,
     MODEL_BATCH_TIMEOUT_SEC,
     MODEL_BATCH_WAIT_MS,
@@ -48,20 +49,24 @@ class FraudScorer:
         self.threshold = bundle.get("threshold", FRAUD_SCORE_THRESHOLD)
         self._shap_explainer = shap.TreeExplainer(self.xgb)
         self.store = RedisFeatureStore()
-        self._batcher = MicroBatcher(
-            self.predict_batch,
-            max_batch=MODEL_BATCH_MAX,
-            max_wait_s=MODEL_BATCH_WAIT_MS / 1000.0,
-            timeout_s=MODEL_BATCH_TIMEOUT_SEC,
-            on_batch=metrics.MODEL_BATCH_SIZE.observe,
-        )
-        self._batcher.start()
+        self._batcher = None
+        if MODEL_BATCH_ENABLED:
+            self._batcher = MicroBatcher(
+                self.predict_batch,
+                max_batch=MODEL_BATCH_MAX,
+                max_wait_s=MODEL_BATCH_WAIT_MS / 1000.0,
+                timeout_s=MODEL_BATCH_TIMEOUT_SEC,
+                on_batch=metrics.MODEL_BATCH_SIZE.observe,
+            )
+            self._batcher.start()
         log.info("model_loaded", version=self.version, source=source,
                  xgb_weight=self.xgb_weight, threshold=self.threshold,
-                 batch_max=MODEL_BATCH_MAX, batch_wait_ms=MODEL_BATCH_WAIT_MS)
+                 batching=MODEL_BATCH_ENABLED, batch_max=MODEL_BATCH_MAX,
+                 batch_wait_ms=MODEL_BATCH_WAIT_MS)
 
     def close(self) -> None:
-        self._batcher.stop()
+        if self._batcher is not None:
+            self._batcher.stop()
 
     def predict_batch(self, rows: list) -> list[tuple[float, np.ndarray]]:
         """Ensemble score + raw SHAP values for a stack of feature vectors.
@@ -100,8 +105,14 @@ class FraudScorer:
             prior_devices=prior_devices,
         )
 
+        vector = features_to_vector(features)
         started = time.perf_counter()
-        fraud_score, shap_values = self._batcher.submit(features_to_vector(features))
+        if self._batcher is not None:
+            fraud_score, shap_values = self._batcher.submit(vector)
+        else:
+            # Inline on this thread: the pre-batching path.
+            fraud_score, shap_values = self.predict_batch([vector])[0]
+            metrics.MODEL_BATCH_SIZE.observe(1)
         metrics.STAGE_LATENCY.labels(stage="model").observe(time.perf_counter() - started)
 
         fraud_score = float(fraud_score)

@@ -38,6 +38,15 @@ RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "600"))
 # it per-call overhead. MODEL_BATCH_WAIT_MS is the ceiling on how long a request
 # waits to be grouped with others; set it to 0 to score every request alone
 # (lowest idle latency, no batching benefit under load).
+# Set false to score each request inline on its own calling thread, with no
+# batcher. That is the pre-batching code path exactly, which is what makes an
+# honest before/after possible without checking out an old commit -- and it is a
+# real escape hatch if the batcher ever needs to be taken out of the picture.
+#
+# Note that MODEL_BATCH_WAIT_MS=0 is NOT equivalent: it still routes every
+# request through the single batcher thread, so it serialises the model call
+# without any of the batching benefit and is strictly worse than either mode.
+MODEL_BATCH_ENABLED = os.environ.get("MODEL_BATCH_ENABLED", "true").lower() != "false"
 MODEL_BATCH_MAX = int(os.environ.get("MODEL_BATCH_MAX", "64"))
 MODEL_BATCH_WAIT_MS = float(os.environ.get("MODEL_BATCH_WAIT_MS", "5"))
 MODEL_BATCH_TIMEOUT_SEC = float(os.environ.get("MODEL_BATCH_TIMEOUT_SEC", "5"))
