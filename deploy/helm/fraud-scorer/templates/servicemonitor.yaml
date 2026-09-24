@@ -1,0 +1,21 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "fraud-scorer.fullname" . }}
+  labels:
+    {{- include "fraud-scorer.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels: {{- include "fraud-scorer.selectorLabels" . | nindent 6 }}
+  endpoints:
+    # /metrics is unauthenticated on purpose (aggregate counters only) and is why
+    # this needs no scrape credentials. Keep it off any public listener.
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
+{{- end }}

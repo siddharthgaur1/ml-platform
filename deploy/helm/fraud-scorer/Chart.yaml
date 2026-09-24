@@ -1,0 +1,23 @@
+apiVersion: v2
+name: fraud-scorer
+description: >-
+  Real-time fraud scoring API (ml-platform fraud subsystem): FastAPI + XGBoost /
+  IsolationForest ensemble, horizontally autoscaled, scraped by Prometheus.
+type: application
+version: 0.1.0
+# The application version this chart defaults to deploying. Overridden by
+# image.tag in values.yaml.
+appVersion: "0.1.0"
+keywords:
+  - fraud
+  - inference
+  - autoscaling
+home: https://github.com/siddharthgaur1/ml-platform
+maintainers:
+  - name: Siddharth Gaur
+
+# Redis and Postgres are deliberately NOT subcharts. Pinning and templating two
+# stateful dependencies here would make `helm dependency update` (and network
+# access to a chart registry) a precondition for deploying the scorer, and in any
+# real cluster both are managed outside this chart anyway. deploy/helm/README.md
+# gives the two commands that stand them up for a local run.

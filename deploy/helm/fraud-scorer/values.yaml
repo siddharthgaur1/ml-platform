@@ -1,0 +1,171 @@
+image:
+  repository: ml-platform/fraud-scorer
+  tag: "0.1.0"
+  # Never :latest with an HPA. A scale-up pulls whatever :latest resolves to at
+  # that moment, so one stale node can serve a different model than its peers
+  # while both report healthy.
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Ignored when autoscaling.enabled is true -- the HPA owns the replica count, and
+# leaving both set means every `helm upgrade` fights the autoscaler.
+replicaCount: 2
+
+service:
+  type: ClusterIP
+  port: 8000
+
+serviceAccount:
+  create: true
+  name: ""
+
+# One uvicorn worker per pod, on purpose.
+#
+# Scoring is CPU-bound and CPython serialises on one GIL, so the throughput unit
+# is a process. Two ways to get N processes: --workers N inside one pod, or N
+# pods. N pods is better here for two reasons:
+#   1. prometheus_client state is per-process. Behind --workers, a /metrics
+#      scrape hits whichever worker the socket hands it, so counters jump around
+#      and histograms are wrong. One worker per pod makes every scrape complete
+#      and lets Prometheus do the aggregation it is for.
+#   2. The HPA can only act on pods. Workers inside a pod are invisible to it.
+workers: 1
+
+# Bounded queueing. Without a limit, load past capacity piles into FastAPI's
+# 40-thread pool and latency grows without bound -- that is what produced a 2.3s
+# p95 at 29.7 req/s while the handler itself reported 32ms. Shedding past the
+# limit keeps the tail bounded; 503 is a better answer than a 3s wait.
+limitConcurrency: 256
+
+# Requests are what the HPA computes utilisation against, so they are load-bearing
+# config and not a formality. Measured cost is ~0.15ms CPU per request batched,
+# ~13ms unbatched; 500m is sized for the batched path with headroom.
+# The limit is deliberately 2x the request rather than equal to it: brief bursts
+# should be absorbed, and CPU throttling a scorer turns a latency spike into a
+# timeout.
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70
+  # Scale up fast, down slowly: a scorer that under-provisions drops traffic,
+  # while one that over-provisions costs money. The asymmetry is intentional.
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+
+# A PDB only helps if minAvailable < replicas; with minReplicas 2 this permits
+# exactly one pod down during a drain.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+backends:
+  redisUrl: redis://redis-master:6379/0
+  postgresDsn: postgresql://fraud:fraud@postgres-postgresql:5432/fraud
+  modelDir: /models
+  reportsDir: /reports
+
+scoring:
+  # 0 disables rate limiting. 600/min is 10 req/s PER KEY -- fine as an abuse
+  # guard, fatal to a load test where every client shares one key. See
+  # docs/BENCHMARK.md.
+  rateLimitPerMin: 600
+  modelBatchMax: 64
+  modelBatchWaitMs: 5
+  dbWriteBatch: 200
+  dbWriteQueueMax: 10000
+
+auth:
+  # Comma-separated. Rendered into a Secret. Leave empty ONLY with
+  # allowUnauthenticated, which the app refuses to start without.
+  apiKeys: ""
+  allowUnauthenticated: false
+  # Use an externally managed Secret instead (e.g. sealed-secrets, ESO). The key
+  # inside it must be `api-keys`.
+  existingSecret: ""
+
+kafka:
+  # The pod also runs the Kafka->Redis stream consumer in a background thread.
+  # Empty means it retries and reports kafka_connected=false in /health, which is
+  # not fatal: POST /score works without it.
+  brokers: ""
+  topic: transactions
+
+metrics:
+  serviceMonitor:
+    # Requires the Prometheus Operator CRDs (kube-prometheus-stack). Off by
+    # default so `helm install` works on a cluster without them.
+    enabled: false
+    interval: 15s
+    scrapeTimeout: 10s
+    labels: {}
+
+# /health returns 503 when Redis or Postgres is unreachable, so readiness
+# actually reflects the pod's ability to do its job.
+#
+# The liveness probe is deliberately NOT /health: a Redis outage would then fail
+# liveness on every pod at once and the kubelet would restart the entire
+# deployment in a loop, converting a degraded dependency into an outage. Liveness
+# checks that the process is serving; readiness checks that it is useful.
+probes:
+  readiness:
+    path: /health
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    path: /metrics
+    initialDelaySeconds: 30
+    periodSeconds: 20
+    failureThreshold: 3
+  startup:
+    # Model load plus SHAP explainer construction: slow, once, at boot. Without a
+    # startup probe the liveness probe can kill the pod mid-load and never let it
+    # finish. 30 x 5s = 150s of grace.
+    path: /metrics
+    periodSeconds: 5
+    failureThreshold: 30
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+
+# Spread replicas across nodes where possible. ScheduleAnyway, not
+# DoNotSchedule: on a single-node kind cluster the hard version would leave every
+# replica after the first permanently Pending.
+topologySpreadConstraints:
+  enabled: true
+  maxSkew: 1
+  whenUnsatisfiable: ScheduleAnyway
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

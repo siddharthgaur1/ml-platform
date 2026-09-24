@@ -1,0 +1,31 @@
+{{ include "fraud-scorer.fullname" . }} deployed.
+
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }} -w
+  kubectl port-forward svc/{{ include "fraud-scorer.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+{{ if .Values.auth.allowUnauthenticated }}
+WARNING: auth.allowUnauthenticated=true. The scoring endpoint accepts any caller.
+Local clusters only.
+{{- else }}
+Score a transaction (key from values auth.apiKeys):
+
+  curl -X POST http://localhost:{{ .Values.service.port }}/score \
+    -H 'Content-Type: application/json' -H 'X-API-Key: <your-key>' \
+    -d '{"transaction_id":"t1","user_id":"user_00001","amount":48000,
+         "merchant_category":"electronics","hour":3,"device_id":"new-device",
+         "location_hash":"560001","user_age_days":12}'
+{{- end }}
+
+{{ if .Values.autoscaling.enabled }}
+Autoscaling {{ .Values.autoscaling.minReplicas }}-{{ .Values.autoscaling.maxReplicas }} at {{ .Values.autoscaling.targetCPUUtilizationPercentage }}% CPU (needs metrics-server):
+
+  kubectl get hpa {{ include "fraud-scorer.fullname" . }} -w
+{{- end }}
+
+{{ if not .Values.metrics.serviceMonitor.enabled }}
+metrics.serviceMonitor.enabled=false -- Prometheus is not scraping this release.
+Install kube-prometheus-stack, then set it true. See deploy/helm/README.md.
+{{- end }}
+
+Rate limit is {{ .Values.scoring.rateLimitPerMin }}/min PER KEY{{ if gt (int .Values.scoring.rateLimitPerMin) 0 }} ({{ div (int .Values.scoring.rateLimitPerMin) 60 }} req/s){{ end }}.
+Load testing? Read docs/BENCHMARK.md first -- this setting silently caps results.

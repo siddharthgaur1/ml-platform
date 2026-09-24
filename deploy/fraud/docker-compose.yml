@@ -97,7 +97,22 @@ services:
 
   scorer:
     <<: *app-build
-    command: uvicorn ml_platform.fraud.api.main:app --host 0.0.0.0 --port 8000
+    # --workers: scoring is CPU-bound and CPython serialises on one GIL, so a
+    # single worker caps the service at its serial rate no matter how many
+    # threads FastAPI's pool has.
+    # --limit-concurrency: without it, excess load queues in the 40-thread pool
+    # and latency grows without bound (this is what made p95 2.3s at 29.7 req/s
+    # while the handler itself reported 32ms). Shedding with 503 past the limit
+    # keeps the tail bounded, which is the right trade for a scorer.
+    # ponytail: with >1 worker, /metrics reflects only the worker that served
+    # the scrape. Fine here (locust is the throughput source of truth, and the
+    # K8s path runs 1 worker per pod and scales replicas instead). If you need
+    # correct aggregates behind --workers, that is prometheus_client's
+    # multiprocess mode and PROMETHEUS_MULTIPROC_DIR.
+    command: >
+      uvicorn ml_platform.fraud.api.main:app --host 0.0.0.0 --port 8000
+      --workers ${UVICORN_WORKERS:-4}
+      --limit-concurrency ${UVICORN_LIMIT_CONCURRENCY:-256}
     ports:
       - "8000:8000"
     depends_on:
@@ -114,7 +129,12 @@ services:
       # explicit ALLOW_UNAUTHENTICATED=true. `make up` sets a dev key.
       API_KEYS: ${API_KEYS:-}
       ALLOW_UNAUTHENTICATED: ${ALLOW_UNAUTHENTICATED:-}
+      # 600/min is 10 req/s per key. That is a sane default for a public
+      # scoring endpoint and a silent cap on any load test, since every locust
+      # user shares one key -- see docs/BENCHMARK.md before trusting a number.
       RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-600}
+      MODEL_BATCH_MAX: ${MODEL_BATCH_MAX:-64}
+      MODEL_BATCH_WAIT_MS: ${MODEL_BATCH_WAIT_MS:-5}
     volumes:
       - ./models:/models:ro
       - ./reports:/reports

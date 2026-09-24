@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help up down logs train test lint load-test clean rebuild ps smoke
+.PHONY: help up down logs train test lint load-test bench-model clean rebuild ps smoke
 
 # API_KEYS is generated once and reused so `make up` twice does not invalidate
 # the key you just curled with. Override by exporting API_KEYS yourself.
@@ -45,8 +45,13 @@ smoke: ## End-to-end check against a running stack
 	       "location_hash":"560001","user_age_days":12}' | python -m json.tool
 
 load-test: ## Headless locust run against a running stack (60s, 50 users)
+	@echo "RATE_LIMIT_PER_MIN=$${RATE_LIMIT_PER_MIN:-600} UVICORN_WORKERS=$${UVICORN_WORKERS:-4}"
+	@echo "(600/min = 10 req/s per key caps this run -- see docs/BENCHMARK.md)"
 	locust -f loadtest/locustfile.py --host http://localhost:8000 \
 	  --headless -u 50 -r 10 -t 60s --csv loadtest/results
+
+bench-model: ## Model-stage A/B: one row per call vs micro-batched (no stack needed)
+	python ../../loadtest/bench_model.py
 
 rebuild: ## Rebuild images without cache
 	docker compose build --no-cache
