@@ -73,20 +73,25 @@ run_arm() {
   # Verify the container actually took the new config. Compose silently reusing a
   # container would make this a comparison of one arm against itself, and the
   # output would look completely normal.
-  local got_batching got_cmd
-  got_batching=$(docker inspect fraud-scorer-1 \
-    --format '{{range .Config.Env}}{{println .}}{{end}}' \
-    | grep '^MODEL_BATCH_ENABLED=' | cut -d= -f2 || true)
+  local env got_batching got_omp got_cmd
+  env=$(docker inspect fraud-scorer-1 --format '{{range .Config.Env}}{{println .}}{{end}}')
+  got_batching=$(echo "$env" | grep '^MODEL_BATCH_ENABLED=' | cut -d= -f2 || true)
+  got_omp=$(echo "$env" | grep '^OMP_NUM_THREADS=' | cut -d= -f2 || true)
   got_cmd=$(docker inspect fraud-scorer-1 --format '{{json .Config.Cmd}}')
   if [ "$got_batching" != "$batching" ]; then
     echo "  FATAL: container has MODEL_BATCH_ENABLED='$got_batching', expected '$batching'" >&2
+    return 1
+  fi
+  # An earlier run had no such check, and its two OMP arms were one config.
+  if [ "$got_omp" != "$omp" ]; then
+    echo "  FATAL: container has OMP_NUM_THREADS='$got_omp', expected '$omp'" >&2
     return 1
   fi
   case "$got_cmd" in
     *"\"--workers\",\"$workers\""*) ;;
     *) echo "  FATAL: container cmd lacks --workers $workers: $got_cmd" >&2; return 1 ;;
   esac
-  echo "  config verified: batching=$got_batching workers=$workers"
+  echo "  config verified: batching=$got_batching workers=$workers omp=$got_omp"
 
   wait_healthy
 

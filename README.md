@@ -83,8 +83,11 @@ service was never taking 1.4 s to score anything; its own `latency_ms` field
 reported ~32 ms throughout. See `docs/BENCHMARK.md`, which also documents the
 `RATE_LIMIT_PER_MIN` default of 10 req/s per key that silently caps any rerun.
 
-End-to-end and Kubernetes scale-out numbers are pending a stack run; the chart is
-in `deploy/helm/` with `deploy/kind/` for a local cluster.
+End to end through HTTP, Redis and Postgres on one laptop: **30.0 -> 120.9 req/s,
+p95 3600 -> 450 ms, p99 5200 -> 550 ms**, 0 failures (`loadtest/ab_endtoend.sh`;
+per-arm breakdown in `docs/BENCHMARK.md`). Batching accounts for 3.8x of the 4.0x.
+Kubernetes scale-out numbers are pending; the chart is in `deploy/helm/` with
+`deploy/kind/` for a local cluster.
 
 ## Setup
 

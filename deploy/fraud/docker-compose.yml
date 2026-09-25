@@ -141,6 +141,12 @@ services:
       MODEL_BATCH_ENABLED: ${MODEL_BATCH_ENABLED:-true}
       MODEL_BATCH_MAX: ${MODEL_BATCH_MAX:-64}
       MODEL_BATCH_WAIT_MS: ${MODEL_BATCH_WAIT_MS:-5}
+      # Same default as the Helm chart (ompNumThreads). Must be listed here:
+      # compose does not forward shell env it isn't told about, and without
+      # these the benchmark's OMP arms silently ran the same config.
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-1}
+      OPENBLAS_NUM_THREADS: ${OPENBLAS_NUM_THREADS:-1}
+      MKL_NUM_THREADS: ${MKL_NUM_THREADS:-1}
     volumes:
       - ./models:/models:ro
       - ./reports:/reports
