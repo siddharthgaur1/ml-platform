@@ -149,15 +149,21 @@ metrics:
 # deployment in a loop, converting a degraded dependency into an outage. Liveness
 # checks that the process is serving; readiness checks that it is useful.
 probes:
+  # timeoutSeconds is explicit because the Kubernetes default is 1s. /health is a
+  # sync handler that pings Redis and Postgres, so under load it queues behind
+  # /score in the thread pool; measured on kind it took ~1.5s, and pods that were
+  # busy, not broken, dropped out of the Service and pushed load onto the rest.
   readiness:
     path: /health
     initialDelaySeconds: 10
     periodSeconds: 10
+    timeoutSeconds: 5
     failureThreshold: 3
   liveness:
     path: /metrics
     initialDelaySeconds: 30
     periodSeconds: 20
+    timeoutSeconds: 3
     failureThreshold: 3
   startup:
     # Model load plus SHAP explainer construction: slow, once, at boot. Without a

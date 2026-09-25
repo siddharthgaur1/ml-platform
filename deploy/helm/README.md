@@ -84,7 +84,7 @@ Give it ~5 minutes: `scaleUp` has a 30s stabilisation window, and `scaleDown` a
 
 ```bash
 kubectl port-forward svc/monitoring-grafana 3000:80
-# admin / prom-operator
+# admin / admin  (set by deploy/kind/up.sh)
 ```
 
 Import `deploy/helm/grafana-dashboard.json` (Dashboards -> New -> Import) and pick

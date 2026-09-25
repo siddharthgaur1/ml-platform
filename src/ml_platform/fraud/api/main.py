@@ -132,9 +132,13 @@ def health(response: Response) -> HealthResponse:
 
 
 @app.get("/metrics")
-def prometheus_metrics() -> Response:
+async def prometheus_metrics() -> Response:
     """Unauthenticated: scrapers rarely carry custom headers, and this exposes
-    only aggregate counters. Keep it off the public listener in a real deploy."""
+    only aggregate counters. Keep it off the public listener in a real deploy.
+
+    async on purpose: it does no I/O, and as a sync handler it queued behind
+    /score in the 40-thread pool. It is the liveness probe, so under load a busy
+    pod failed it and got restarted (measured on kind: 1.5 s to answer)."""
     thread = state.get("consumer_thread")
     if thread is not None:
         metrics.STREAM_LAG_SECONDS.set(
