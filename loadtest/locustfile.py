@@ -30,11 +30,19 @@ _LOCATION_HASHES = [f"5600{i:02d}" for i in range(20)]
 # published throughput figure.
 _API_KEY = os.environ.get("API_KEYS", "").split(",")[0].strip()
 
+# kube-proxy balances per TCP connection, not per request. With keep-alive, every
+# user's connection is pinned to whichever pod existed when it opened, so pods the
+# HPA adds mid-run get nothing: measured on kind, 4 of 6 pods served 0 requests.
+# Real traffic comes from many clients; this makes each request a new connection.
+_CONNECTION_CLOSE = os.environ.get("CONNECTION_CLOSE") == "1"
+
 
 class ScorerUser(HttpUser):
     wait_time = between(0.05, 0.3)
 
     def on_start(self):
+        if _CONNECTION_CLOSE:
+            self.client.headers.update({"Connection": "close"})
         if _API_KEY:
             self.client.headers.update({"X-API-Key": _API_KEY})
 

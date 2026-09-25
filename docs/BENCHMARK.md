@@ -135,7 +135,7 @@ claims, and collapsing 12 replicas against one container into a single "29.7 →
 |---|---|---|
 | before | 29.7 req/s | 1 worker, single-row model call |
 | after, same box | 120.9 req/s | batched + 4 `--workers`, code change only |
-| after, K8s scale-out | *measure* | per-replica × N, with the HPA graph |
+| after, K8s scale-out | 116 req/s on kind | same laptop; *not* a scale-out number, see below |
 
 Same-box run, `bash loadtest/ab_endtoend.sh` (50 users, 60 s per arm, 12-core
 laptop, 0 failures in every arm):
@@ -153,3 +153,33 @@ OMP arms are within noise of each other. An earlier run of this script reported
 the same conclusion from invalid data: compose did not forward `OMP_NUM_THREADS`,
 so both OMP arms ran one config. The script now checks the container's value and
 aborts on a mismatch.
+
+## Kubernetes (kind, same laptop)
+
+`bash deploy/kind/up.sh`, then the in-cluster load generator in
+`loadtest/k8s-locust-job.yaml` (200 users, 5 min). Three runs, each fixing what
+the previous one exposed:
+
+| run | req/s | median | p95 | failures | what it showed |
+|---|---|---|---|---|---|
+| 1 | 94.8 | 1700 ms | 3700 ms | 0 | probes timing out at the 1 s default pulled busy pods out of the Service |
+| 2 | 100.2 | 1800 ms | 2700 ms | 0 | all pods stayed ready, but 4 of 6 served **0 requests** |
+| 3 | 116.0 | 880 ms | 3400 ms | 0.34% | load spread over all 8 pods; HPA at max, pods at their CPU limit |
+
+Run 2's cause: kube-proxy balances per TCP connection. Locust keeps each user's
+connection alive, so all 200 connections stayed on the 2 pods that existed at
+start, and the HPA's new pods idled. Run 3 sets `CONNECTION_CLOSE=1`, which
+models many independent clients. In production the same trap applies to any
+client with a keep-alive pool; the fix there is an L7 load balancer (Ingress,
+service mesh), not the load test.
+
+Run 3's failures were 70 dropped connections from one pod the liveness probe
+restarted while it was saturated, and 48 batcher deadline timeouts. Those
+returned 500. They now return a retryable 503 (`scoring overloaded, retry`),
+which is unit-tested but was not re-measured.
+
+**Why 116 and not more:** eight 1-CPU pods on one 12-core laptop, sharing it with
+locust, Prometheus, Redis and Postgres. The HPA pinned at its `maxReplicas: 8`
+with pods at their CPU limit. This proves the autoscaling path works (2 -> 8
+replicas in ~90 s under load) and nothing about horizontal throughput. A
+scale-out number needs nodes with their own CPUs, i.e. the cloud run.

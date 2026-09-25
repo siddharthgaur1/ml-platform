@@ -12,7 +12,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, ge
 SCORE_REQUESTS = Counter(
     "fraud_score_requests_total",
     "Scoring requests handled, by source and outcome.",
-    ["source", "outcome"],  # source: http|stream, outcome: ok|error
+    ["source", "outcome"],  # source: http|stream, outcome: ok|error|overloaded
 )
 
 SCORE_LATENCY = Histogram(

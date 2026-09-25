@@ -59,6 +59,12 @@ def score(req: ScoreRequest, key_id: str = Depends(require_api_key)) -> ScoreRes
     start = time.perf_counter()
     try:
         result = state["scorer"].score(req.model_dump())
+    except TimeoutError:
+        # The batcher's deadline: this replica is overloaded, not broken. 503 is
+        # retryable and tells a load balancer to back off; 500 says neither.
+        metrics.SCORE_REQUESTS.labels(source="http", outcome="overloaded").inc()
+        log.warning("scoring_timeout", transaction_id=req.transaction_id, key_id=key_id)
+        raise HTTPException(status_code=503, detail="scoring overloaded, retry") from None
     except Exception:
         metrics.SCORE_REQUESTS.labels(source="http", outcome="error").inc()
         log.exception("scoring_failed", transaction_id=req.transaction_id, key_id=key_id)

@@ -191,6 +191,17 @@ def test_scoring_failure_is_a_500_not_a_crash(client, monkeypatch):
     assert r.status_code == 500
 
 
+def test_batch_timeout_is_a_retryable_503(client, monkeypatch):
+    """Seen on kind at max replicas: an overloaded pod's batch missed its 5s
+    deadline and the caller got a 500, which says "broken", not "back off"."""
+    def slow(tx):
+        raise TimeoutError("model batch did not complete within 5.0s")
+
+    monkeypatch.setattr(client.scorer, "score", slow)
+    r = client.post("/score", json=PAYLOAD, headers={"X-API-Key": VALID_KEY})
+    assert r.status_code == 503
+
+
 def test_db_failure_still_returns_the_score(client, monkeypatch):
     """The caller needs the score and it is valid; losing the audit row is a
     separate problem, counted in fraud_db_insert_failures_total."""

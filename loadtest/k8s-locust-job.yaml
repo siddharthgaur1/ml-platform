@@ -33,6 +33,9 @@ spec:
               value: "300s"
             - name: PYTHONPATH
               value: /tmp/locust
+            # See locustfile.py: without this, pods added by the HPA get no load.
+            - name: CONNECTION_CLOSE
+              value: "1"
           command: ["sh", "-c"]
           args:
             - >-

@@ -86,8 +86,10 @@ reported ~32 ms throughout. See `docs/BENCHMARK.md`, which also documents the
 End to end through HTTP, Redis and Postgres on one laptop: **30.0 -> 120.9 req/s,
 p95 3600 -> 450 ms, p99 5200 -> 550 ms**, 0 failures (`loadtest/ab_endtoend.sh`;
 per-arm breakdown in `docs/BENCHMARK.md`). Batching accounts for 3.8x of the 4.0x.
-Kubernetes scale-out numbers are pending; the chart is in `deploy/helm/` with
-`deploy/kind/` for a local cluster.
+On a local kind cluster the HPA scales 2 -> 8 replicas in ~90 s under load
+(116 req/s, bounded by the same laptop's CPUs, so not a scale-out figure); the
+three runs and the two bugs they exposed are in `docs/BENCHMARK.md`. The chart
+is in `deploy/helm/`, with `deploy/kind/` for a local cluster.
 
 ## Setup
 
