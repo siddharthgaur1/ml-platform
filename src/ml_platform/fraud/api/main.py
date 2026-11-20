@@ -26,6 +26,7 @@ state: dict = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_pool()
+    db.start_writer()
     init_rate_limiter()
     scorer = FraudScorer()
     state["scorer"] = scorer
@@ -36,12 +37,16 @@ async def lifespan(app: FastAPI):
 
     state["last_stream_message_at"] = time.time()
     state["consumer_thread"], state["consumer_stop"] = start_stream_consumer_thread(
-        scorer, db.insert_score, on_message=_note_message
+        scorer, db.enqueue_score, on_message=_note_message
     )
     log.info("api_started", model_version=scorer.version, model_source=scorer.source)
     yield
     state["consumer_stop"].set()
     state["consumer_thread"].join(timeout=5)
+    # Order matters: stop producing rows, flush the ones already queued, then
+    # drop the pool the writer needs to flush them through.
+    scorer.close()
+    db.stop_writer()
     db.close_pool()
     log.info("api_stopped")
 
@@ -54,6 +59,12 @@ def score(req: ScoreRequest, key_id: str = Depends(require_api_key)) -> ScoreRes
     start = time.perf_counter()
     try:
         result = state["scorer"].score(req.model_dump())
+    except TimeoutError:
+        # The batcher's deadline: this replica is overloaded, not broken. 503 is
+        # retryable and tells a load balancer to back off; 500 says neither.
+        metrics.SCORE_REQUESTS.labels(source="http", outcome="overloaded").inc()
+        log.warning("scoring_timeout", transaction_id=req.transaction_id, key_id=key_id)
+        raise HTTPException(status_code=503, detail="scoring overloaded, retry") from None
     except Exception:
         metrics.SCORE_REQUESTS.labels(source="http", outcome="error").inc()
         log.exception("scoring_failed", transaction_id=req.transaction_id, key_id=key_id)
@@ -72,14 +83,12 @@ def score(req: ScoreRequest, key_id: str = Depends(require_api_key)) -> ScoreRes
         "merchant_category": req.merchant_category,
         **result,
     }
-    try:
-        db.insert_score(row)
-    except Exception:
-        # The score itself is valid and the caller needs it, so this stays a
-        # 200 — but it is counted, because sustained failures mean /stats and
-        # drift detection are blind while scoring still looks healthy.
-        metrics.DB_INSERT_FAILURES.inc()
-        log.exception("db_insert_failed", transaction_id=req.transaction_id)
+    # Queued, not written inline: the caller already has its score, and a
+    # committing INSERT per request put a Postgres round trip and an fsync on
+    # the scoring path. Failures are still counted (in the writer) rather than
+    # raised, because sustained loss means /stats and drift detection are blind
+    # while scoring still looks healthy.
+    db.enqueue_score(row)
 
     return ScoreResponse(
         transaction_id=req.transaction_id,
@@ -129,9 +138,13 @@ def health(response: Response) -> HealthResponse:
 
 
 @app.get("/metrics")
-def prometheus_metrics() -> Response:
+async def prometheus_metrics() -> Response:
     """Unauthenticated: scrapers rarely carry custom headers, and this exposes
-    only aggregate counters. Keep it off the public listener in a real deploy."""
+    only aggregate counters. Keep it off the public listener in a real deploy.
+
+    async on purpose: it does no I/O, and as a sync handler it queued behind
+    /score in the 40-thread pool. It is the liveness probe, so under load a busy
+    pod failed it and got restarted (measured on kind: 1.5 s to answer)."""
     thread = state.get("consumer_thread")
     if thread is not None:
         metrics.STREAM_LAG_SECONDS.set(

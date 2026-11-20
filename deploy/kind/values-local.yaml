@@ -1,0 +1,54 @@
+# Helm values for the local kind cluster.
+#
+#   helm install fraud deploy/helm/fraud-scorer -f deploy/kind/values-local.yaml
+#
+# Differs from the defaults only where a local cluster requires it. Everything
+# else is the same config the cloud run uses, so the local run actually exercises
+# the chart rather than a parallel one.
+
+image:
+  repository: ml-platform/fraud-scorer
+  tag: "0.1.0"
+  # kind load docker-image puts the image on the nodes directly; there is no
+  # registry to pull from, so a pull attempt would fail.
+  pullPolicy: Never
+
+# Bitnami chart service names, installed per deploy/helm/README.md.
+backends:
+  redisUrl: redis://redis-master:6379/0
+  postgresDsn: postgresql://fraud:fraud@postgres-postgresql:5432/fraud
+
+auth:
+  # Throwaway, and it never leaves this machine. Anything real belongs in
+  # auth.existingSecret.
+  apiKeys: "local-dev-key"
+
+scoring:
+  # 24000/min = 400 req/s per key. The 600/min default is 10 req/s and would cap
+  # a load test at ~1/40th of the target while reporting healthy 429s.
+  # See docs/BENCHMARK.md.
+  rateLimitPerMin: 24000
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  # 8 x 500m = 4 CPU of requests at full scale, which fits a laptop-hosted
+  # 3-node kind cluster. The cloud values keep the default 12.
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+metrics:
+  serviceMonitor:
+    # Requires kube-prometheus-stack (which installs the CRDs) to be present
+    # first. Install order matters: this manifest will not apply without them.
+    enabled: true
+    labels:
+      release: monitoring

@@ -1,0 +1,56 @@
+# In-cluster load generator for the kind / cloud run.
+#
+#     kubectl create configmap locustfile --from-file=loadtest/locustfile.py \
+#       --dry-run=client -o yaml | kubectl apply -f -
+#     kubectl delete job locust --ignore-not-found
+#     kubectl apply -f loadtest/k8s-locust-job.yaml
+#     kubectl logs -f job/locust
+#
+# In-cluster rather than `kubectl port-forward svc/...`: port-forward pins one
+# pod, so every request bypasses the Service's load balancing and the run
+# measures a single replica no matter what the HPA does.
+#
+# Reuses the scorer image because the locustfile imports ml_platform.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: locust
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: locust
+          image: ml-platform/fraud-scorer:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: API_KEYS
+              value: local-dev-key
+            - name: USERS
+              value: "200"
+            - name: DURATION
+              value: "300s"
+            - name: PYTHONPATH
+              value: /tmp/locust
+            # See locustfile.py: without this, pods added by the HPA get no load.
+            - name: CONNECTION_CLOSE
+              value: "1"
+          command: ["sh", "-c"]
+          args:
+            - >-
+              pip install -q --target /tmp/locust 'locust>=2.31' &&
+              python -m locust -f /lf/locustfile.py
+              --host http://fraud-fraud-scorer:8000
+              --headless -u "$USERS" -r 20 -t "$DURATION"
+              --processes 4 --only-summary
+          resources:
+            requests:
+              cpu: "2"
+          volumeMounts:
+            - name: lf
+              mountPath: /lf
+      volumes:
+        - name: lf
+          configMap:
+            name: locustfile

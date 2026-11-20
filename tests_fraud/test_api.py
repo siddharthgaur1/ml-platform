@@ -38,6 +38,10 @@ class _FakeScorer:
         self.calls.append(tx)
         return {"fraud_score": 0.91, "is_fraud": True, "shap_explanation": {"amount": 1.2}}
 
+    def close(self):
+        """Real FraudScorer owns a batcher thread that lifespan shutdown stops."""
+        self.closed = True
+
 
 class _FakeStore:
     def __init__(self, ok):
@@ -185,6 +189,17 @@ def test_scoring_failure_is_a_500_not_a_crash(client, monkeypatch):
     monkeypatch.setattr(client.scorer, "score", boom)
     r = client.post("/score", json=PAYLOAD, headers={"X-API-Key": VALID_KEY})
     assert r.status_code == 500
+
+
+def test_batch_timeout_is_a_retryable_503(client, monkeypatch):
+    """Seen on kind at max replicas: an overloaded pod's batch missed its 5s
+    deadline and the caller got a 500, which says "broken", not "back off"."""
+    def slow(tx):
+        raise TimeoutError("model batch did not complete within 5.0s")
+
+    monkeypatch.setattr(client.scorer, "score", slow)
+    r = client.post("/score", json=PAYLOAD, headers={"X-API-Key": VALID_KEY})
+    assert r.status_code == 503
 
 
 def test_db_failure_still_returns_the_score(client, monkeypatch):

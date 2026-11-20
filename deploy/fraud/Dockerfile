@@ -28,9 +28,21 @@ RUN apt-get update \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Dependencies before source, deliberately.
+#
+# The obvious ordering -- COPY src, then pip install ".[fraud]" -- puts the whole
+# dependency install (xgboost, shap, scikit-learn, evidently: ~4 minutes) in a
+# layer keyed on the source tree, so editing one Python file reinstalls
+# everything. Installing against a stub package first keeps that layer cached
+# until pyproject.toml itself changes, which turns a code-change rebuild from
+# minutes into seconds.
 COPY pyproject.toml README.md ./
+RUN mkdir -p src/ml_platform && touch src/ml_platform/__init__.py  && pip install ".[fraud]"
+
+# Now the real source. --no-deps because the dependency set is already resolved
+# above; re-resolving here would defeat the split.
 COPY src ./src
-RUN pip install ".[fraud]"
+RUN pip install --no-deps --force-reinstall ".[fraud]"
 
 
 FROM ${PYTHON_IMAGE} AS runtime
@@ -56,3 +68,19 @@ EXPOSE 8000
 # Compose overrides this for producer/monitor. Having a real default means
 # `docker run` on the image alone does something sensible.
 CMD ["uvicorn", "ml_platform.fraud.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+# docker-compose mounts ./models into the container, but a Kubernetes pod has no
+# host directory to mount, so the Helm path builds this target instead and ships
+# the bundle in the image.
+#
+# Baking a model into the application image couples two lifecycles that should be
+# independent -- a retrain should not need an app rebuild. It is the right trade
+# for a self-contained demo and the wrong one for production, where you set
+# MLFLOW_TRACKING_URI and the registry becomes the source of truth (see
+# common/registry.py); the baked file is then unused.
+#
+# ponytail: image-baked model, switch to the MLflow registry or an initContainer
+# when the model needs to roll independently of the code.
+FROM runtime AS runtime-with-model
+COPY --chown=appuser deploy/fraud/models/ /models/

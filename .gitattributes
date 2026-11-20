@@ -1,0 +1,14 @@
+# Shell scripts must keep LF endings. Checked out with CRLF on Windows, a .sh
+# file fails at the shebang with "bad interpreter: no such file or directory",
+# and the same applies to anything the containers execute.
+*.sh text eol=lf
+
+# Entrypoints and SQL run inside Linux containers.
+Dockerfile text eol=lf
+*.sql text eol=lf
+
+# Helm templates are parsed by helm, not by Windows tooling; keep them stable so
+# the checksum/config annotation does not change purely from line endings.
+*.yaml text eol=lf
+*.yml text eol=lf
+*.tpl text eol=lf

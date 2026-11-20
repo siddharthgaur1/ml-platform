@@ -59,15 +59,41 @@ two.
 
 | | |
 |---|---|
-| Tests | 113 passing (25 monitoring + 23 features + 60 fraud + 5 new cross-subsystem) |
+| Tests | 123 passing (25 monitoring + 23 features + 70 fraud + 5 cross-subsystem) |
 | Subsystem boundaries crossed by one test | 3 |
 | Duplicate code eliminated by the merge | **~0 lines — see Limitations** |
-| Fraud service throughput | 29.7 req/s, median 1400 ms, p95 2300 ms, p99 2700 ms |
-| Fraud service bottleneck | identified: `uvicorn` running without `--workers` |
+| Fraud model stage, before | 24.5 req/s, median 391 ms, p95 696 ms |
+| Fraud model stage, after | **222.6 req/s, median 51 ms, p95 71 ms** (8.8-9.2x over four runs, scores bitwise identical) |
+| Fraud service bottleneck | `IsolationForest.score_samples` on one row: 10.9 ms of 13.0 ms model CPU |
 
-Every number above is reproducible from this repo. The throughput figures come
-from the committed locustfile in `loadtest/` and were measured on a laptop, not
-extrapolated.
+Every number above is reproducible from this repo, on a laptop, not extrapolated.
+The model-stage figures come from `loadtest/bench_model.py` (`make bench-model`),
+which needs no running stack and asserts the two paths return identical scores
+before reporting a speedup. The end-to-end figures come from the committed
+locustfile in `loadtest/`.
+
+**The earlier 29.7 req/s number, and what was wrong about it.** It was published
+here with the cause given as "`uvicorn` running without `--workers`". That was
+half right. Profiling the committed bundle found 84% of per-request model CPU in
+`IsolationForest.score_samples` on a single `(1, 11)` array -- per-call overhead,
+not arithmetic, since 256 rows cost only 2.4x one row. The isolated model stage
+runs at 24.5 req/s, which reproduces the 29.7 end-to-end figure almost exactly:
+the model call was essentially the whole bottleneck, and `--workers` alone would
+have bought replicas to hide it.
+
+The 1400 ms median was also not work. Sync handlers run in FastAPI's 40-thread
+pool, and 29.7 x 1.4 s = 41.6 requests in flight -- the pool, saturated. The
+service was never taking 1.4 s to score anything; its own `latency_ms` field
+reported ~32 ms throughout. See `docs/BENCHMARK.md`, which also documents the
+`RATE_LIMIT_PER_MIN` default of 10 req/s per key that silently caps any rerun.
+
+End to end through HTTP, Redis and Postgres on one laptop: **30.0 -> 120.9 req/s,
+p95 3600 -> 450 ms, p99 5200 -> 550 ms**, 0 failures (`loadtest/ab_endtoend.sh`;
+per-arm breakdown in `docs/BENCHMARK.md`). Batching accounts for 3.8x of the 4.0x.
+On a local kind cluster the HPA scales 2 -> 8 replicas in ~90 s under load
+(116 req/s, bounded by the same laptop's CPUs, so not a scale-out figure); the
+three runs and the two bugs they exposed are in `docs/BENCHMARK.md`. The chart
+is in `deploy/helm/`, with `deploy/kind/` for a local cluster.
 
 ## Setup
 
@@ -92,7 +118,9 @@ tests/             monitoring + the end-to-end pipeline test
 tests_features/    feature store
 tests_fraud/       fraud service
 docs/absorbed/     the original READMEs, RUNBOOK and SECURITY of the merged repos
-loadtest/          locustfile behind the throughput numbers above
+loadtest/          locustfile + bench_model.py behind the numbers above
+deploy/helm/       Helm chart: Deployment, HPA, ServiceMonitor, PDB
+deploy/kind/       local 3-node kind cluster config and values
 deploy/fraud/      the docker-compose stack the fraud subsystem actually runs on
 deploy/features/   feature-store container assets
 ```
